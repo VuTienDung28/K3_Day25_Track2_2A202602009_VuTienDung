@@ -8,7 +8,7 @@ _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)
 import os
 from missions._common import num, catalog_by_type, ROOT
 from finops import report, sustainability
-from missions import m1_efficiency_audit, m2_inference_levers, m3_purchasing
+from missions import m1_efficiency_audit, m2_inference_levers, m3_purchasing, ext5_carbon_aware
 
 DAYS = 30
 # one tier down for over-provisioned ("util-lie") GPUs
@@ -39,6 +39,18 @@ def run(verbose: bool = True) -> dict:
         "Right-size util-lies": round(rightsize_savings),
         "Kill idle GPUs": round(idle_savings),
     }
+    total_savings_usd = sum(levers.values())
+    actions = [
+        {"action": "Switch purchasing tiers (spot/reserved per 55% break-even)",
+         "savings_usd": round(purchasing_savings), "effort": "low",
+         "why": f"{purchasing_savings / total_savings_usd * 100:.0f}% of total savings; contract change, no code"},
+        {"action": "Right-size util-lie GPUs + kill idle",
+         "savings_usd": round(rightsize_savings + idle_savings), "effort": "low",
+         "why": "quick wins — downgrade or switch off within the week"},
+        {"action": "Inference levers (cascade + prompt cache + batch)",
+         "savings_usd": round(infer_savings), "effort": "medium",
+         "why": f"{r2['savings_pct']:.0f}% unit-cost cut ($/1M-token); scales with traffic growth"},
+    ]
     baseline = r2["baseline_daily"] * DAYS + r3["on_demand_monthly"]
     optimized = baseline - sum(levers.values())
     total_pct = sum(levers.values()) / baseline * 100 if baseline else 0.0
@@ -52,10 +64,13 @@ def run(verbose: bool = True) -> dict:
         "best_region": min(sustainability.REGION_CARBON, key=sustainability.REGION_CARBON.get),
     }
 
-    md = report.build_report(baseline, optimized, levers, sustainability=sust)
+    md = report.build_report(baseline, optimized, levers, sustainability=sust,
+                             reasoning=r2.get("reasoning"),
+                             carbon=ext5_carbon_aware.run(verbose=False),
+                             analysis={"util_lies": r1["lies"], "actions": actions})
     out_md = os.path.join(ROOT, "outputs", "report.md")
     os.makedirs(os.path.dirname(out_md), exist_ok=True)
-    with open(out_md, "w") as f:
+    with open(out_md, "w", encoding="utf-8") as f:
         f.write(md)
     png = report.savings_waterfall(levers, os.path.join(ROOT, "outputs", "savings.png"))
 
